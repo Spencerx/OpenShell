@@ -7,7 +7,7 @@ name: Rust Image Binary Build (openshell-gateway / openshell-sandbox / openshell
 # consumes them as prebuilt artifacts. Gateway images use GNU-linked binaries
 # for the NVIDIA distroless C/C++ runtime; supervisor and cli images use musl/static
 # binaries so the final image can remain scratch. Gateway GNU binaries are
-# built with an explicit glibc 2.31 floor so image, package, and tarball
+# built with an explicit glibc 2.28 floor so image, package, and tarball
 # artifacts share the same host portability contract.
 
 on:
@@ -139,7 +139,7 @@ jobs:
                 zig_target=x86_64-linux-musl
               else
                 target=x86_64-unknown-linux-gnu
-                zig_target=x86_64-unknown-linux-gnu.2.31
+                zig_target=x86_64-unknown-linux-gnu.2.28
               fi
               ;;
             arm64)
@@ -148,7 +148,7 @@ jobs:
                 zig_target=aarch64-linux-musl
               else
                 target=aarch64-unknown-linux-gnu
-                zig_target=aarch64-unknown-linux-gnu.2.31
+                zig_target=aarch64-unknown-linux-gnu.2.28
               fi
               ;;
             *)
@@ -167,7 +167,7 @@ jobs:
       - name: Cache Rust target and registry
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
         with:
-          shared-key: rust-native-${{ inputs.component }}-${{ inputs.arch }}
+          shared-key: rust-native-${{ inputs.component }}-${{ inputs.arch }}-zig-wrapper-${{ hashFiles('tasks/scripts/setup-zig-cc-wrapper.sh') }}
           cache-directories: .cache/sccache
           cache-targets: "true"
 
@@ -211,6 +211,10 @@ jobs:
           echo "CARGO_TARGET_${TARGET_ENV_UPPER}_LINKER=/tmp/zig-musl/cc" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_${TARGET_ENV_UPPER}_RUSTFLAGS=-Clink-self-contained=no" >> "$GITHUB_ENV"
 
+      - name: Set up zig glibc wrappers
+        if: inputs.component == 'gateway'
+        run: tasks/scripts/setup-zig-cc-wrapper.sh "${{ steps.target.outputs.zig_target }}" "${{ steps.target.outputs.zig_target }}" /tmp/zig-gnu
+
       - name: Build ${{ steps.target.outputs.binary }} (${{ steps.target.outputs.zig_target || steps.target.outputs.target }})
         env:
           # Preserve the release-codegen setting used by the old Dockerfile
@@ -226,13 +230,17 @@ jobs:
           fi
 
           mise x -- rustup target add "${{ steps.target.outputs.target }}"
+          
           cargo_cmd=(cargo build)
           build_target="${{ steps.target.outputs.target }}"
+          args=()
+          
           if [[ "${{ inputs.component }}" == "gateway" ]]; then
             cargo_cmd=(cargo zigbuild)
             build_target="${{ steps.target.outputs.zig_target }}"
+            args+=(--features bundled-z3)
           fi
-          args=(
+          args+=(
             --release
             --target "$build_target"
             -p "${{ steps.target.outputs.crate }}"
@@ -266,7 +274,7 @@ jobs:
         run: |
           set -euo pipefail
           BIN="target/${{ steps.target.outputs.target }}/release/${{ steps.target.outputs.binary }}"
-          tasks/scripts/verify-glibc-symbols.sh 2.31 "$BIN"
+          tasks/scripts/verify-glibc-symbols.sh 2.28 "$BIN"
 
       - name: Stage binary for prebuilt layout
         run: |
